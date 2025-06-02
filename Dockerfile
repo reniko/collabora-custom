@@ -1,6 +1,9 @@
 FROM collabora/code:latest
 
-RUN apt-get update && \
+USER root
+
+RUN mkdir -p /var/lib/apt/lists/partial && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         locales \
         debconf-i18n \
