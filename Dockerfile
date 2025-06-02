@@ -15,3 +15,5 @@ RUN mkdir -p /var/lib/apt/lists/partial && \
     rsync -a --delete /etc/ /opt/cool/systemplate/etc/ && \
     chmod -R 755 /opt/cool/systemplate && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+USER cool
