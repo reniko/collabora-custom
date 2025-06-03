@@ -5,11 +5,20 @@ echo "🚀 Starting Collabora CODE with German locale support..."
 
 # Erstelle und aktualisiere systemplate bei jedem Start
 echo "📁 Setting up systemplate..."
-sudo mkdir -p /opt/cool/systemplate/{dev,tmp,proc,sys}
-sudo rsync -a --delete /etc/ /opt/cool/systemplate/etc/
-sudo cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/ 2>/dev/null || true
-sudo chmod -R 755 /opt/cool/systemplate
-sudo chown -R cool:cool /opt/cool
+
+mkdir -p /opt/cool/systemplate/{dev,tmp,proc,sys}
+rsync -a --delete /etc/ /opt/cool/systemplate/etc/
+rm -f /opt/cool/systemplate/etc/hosts  # ← damit Link möglich
+cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/ 2>/dev/null || true
+chmod -R 755 /opt/cool/systemplate
+chown -R cool:cool /opt/cool
+
+
+#sudo mkdir -p /opt/cool/systemplate/{dev,tmp,proc,sys}
+#sudo rsync -a --delete /etc/ /opt/cool/systemplate/etc/
+#sudo cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/ 2>/dev/null || true
+#sudo chmod -R 755 /opt/cool/systemplate
+#sudo chown -R cool:cool /opt/cool
 echo "✅ systemplate setup complete"
 
 # Zeige Locale-Info
