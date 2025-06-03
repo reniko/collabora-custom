@@ -1,9 +1,9 @@
-FROM collabora/code
+FROM collabora/code:latest
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installiere deutsche Locales und Tools
+# Installiere notwendige Pakete und konfiguriere Locales
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       locales \
@@ -11,42 +11,39 @@ RUN apt-get update && \
       debconf-i18n \
       rsync \
       curl && \
-    # Deutsche Locale konfigurieren
+    # Konfiguriere deutsche und englische Locales
     echo "de_DE.UTF-8 UTF-8" >> /etc/locale.gen && \
     echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
     locale-gen && \
     update-locale LANG=de_DE.UTF-8 LC_ALL=de_DE.UTF-8 && \
-    # Systemplate korrekt vorbereiten
+    # Erstelle systemplate Verzeichnis mit korrekten Berechtigungen
     mkdir -p /opt/cool/systemplate && \
-    chown -R cool:cool /opt/cool && \
-    rsync -av --delete /etc/ /opt/cool/systemplate/etc/ && \
     mkdir -p /opt/cool/systemplate/{dev,tmp,proc,sys} && \
-    cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/ && \
+    # Synchronisiere /etc nach systemplate
+    rsync -av --delete /etc/ /opt/cool/systemplate/etc/ && \
+    # Kopiere wichtige Systemdateien
+    cp /etc/passwd /opt/cool/systemplate/etc/ && \
+    cp /etc/group /opt/cool/systemplate/etc/ && \
+    cp /etc/hosts /opt/cool/systemplate/etc/ && \
+    cp /etc/resolv.conf /opt/cool/systemplate/etc/ && \
+    # Setze Berechtigungen
     chmod -R 755 /opt/cool/systemplate && \
     chown -R cool:cool /opt/cool && \
-    # Cleanup
+    # Aufräumen
     apt-get autoremove -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Kopiere das Startup-Script
+# Setze Umgebungsvariablen für deutsche Lokalisierung
+ENV LANG=de_DE.UTF-8 \
+    LANGUAGE=de_DE:de:en_US:en \
+    LC_ALL=de_DE.UTF-8
+
+# Kopiere das Start-Script
 COPY start-collabora.sh /usr/local/bin/start-collabora.sh
 RUN chmod +x /usr/local/bin/start-collabora.sh
 
-# Environment-Variablen
-ENV LANG=de_DE.UTF-8 \
-    LANGUAGE=de_DE:de:en_US:en \
-    LC_ALL=de_DE.UTF-8 \
-    dictionaries="de_DE en_US" \
-    server_name="localhost" \
-    extra_params="--o:ssl.enable=false --o:ssl.termination=true"
-
 USER cool
 
-# Verwende unser Startup-Script
-ENTRYPOINT ["/usr/local/bin/start-collabora.sh"]
-
-EXPOSE 9980
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:9980/hosting/discovery || exit 1
+# Verwende das angepasste Start-Script
+CMD ["/usr/local/bin/start-collabora.sh"]
