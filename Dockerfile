@@ -29,27 +29,9 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Erstelle ein einfaches Startup-Script inline
-RUN cat > /usr/local/bin/start-collabora.sh << 'EOF' && \
-    chmod +x /usr/local/bin/start-collabora.sh
-#!/bin/bash
-set -e
-
-# Prüfe systemplate bei jedem Start
-if [ -d "/opt/cool/systemplate" ] && [ -w "/opt/cool/systemplate" ]; then
-    echo "Updating systemplate..."
-    rsync -a --delete /etc/ /opt/cool/systemplate/etc/
-    cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/
-fi
-
-# Starte Collabora mit korrekten Parametern
-exec /usr/bin/coolwsd \
-    --version \
-    --o:sys_template_path=/opt/cool/systemplate \
-    --o:child_root_path=/opt/cool/child-roots \
-    --o:file_server_root_path=/usr/share/coolwsd \
-    "$@"
-EOF
+# Kopiere das Startup-Script
+COPY start-collabora.sh /usr/local/bin/start-collabora.sh
+RUN chmod +x /usr/local/bin/start-collabora.sh
 
 # Environment-Variablen
 ENV LANG=de_DE.UTF-8 \
