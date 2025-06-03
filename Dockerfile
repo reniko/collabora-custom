@@ -1,4 +1,4 @@
-FROM collabora/code:24.04
+FROM collabora/code
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
