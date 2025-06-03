@@ -11,7 +11,7 @@ echo "📁 Setting up systemplate..."
 mkdir -p /opt/cool/systemplate/{dev,tmp,proc,sys}
 rsync -a --delete /etc/ /opt/cool/systemplate/etc/
 rm -f /opt/cool/systemplate/etc/hosts
-cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/ 2>/dev/null || true
+cp /etc/{passwd,group,resolv.conf} /opt/cool/systemplate/etc/ 2>/dev/null || true
 chmod -R 755 /opt/cool/systemplate
 chown -R cool:cool /opt/cool
 echo "✅ systemplate setup complete"
