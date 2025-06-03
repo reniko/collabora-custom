@@ -28,6 +28,9 @@ ENV LANG=de_DE.UTF-8 \
 COPY start-collabora.sh /usr/local/bin/start-collabora.sh
 RUN chmod +x /usr/local/bin/start-collabora.sh
 
+RUN mkdir -p /opt/cool/systemplate && \
+    chown -R cool:cool /opt/cool
+
 USER cool
 
 CMD ["/usr/local/bin/start-collabora.sh"]
