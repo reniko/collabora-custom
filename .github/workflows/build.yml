@@ -86,7 +86,7 @@ jobs:
             type=ref,event=pr
             type=raw,value=latest,enable={{is_default_branch}}
             type=schedule,pattern={{date 'YYYYMMDD'}}
-            type=run_number
+            type=raw,value=${{ github.run_number }}
           labels: |
             org.opencontainers.image.base.digest=${{ needs.check-upstream.outputs.base-digest }}
             org.opencontainers.image.base.name=${{ env.BASE_IMAGE }}
