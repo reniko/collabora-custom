@@ -3,13 +3,14 @@ set -e
 
 echo "🚀 Starting Collabora CODE with German locale support..."
 
-# Prüfe systemplate bei jedem Start
-if [ -d "/opt/cool/systemplate" ] && [ -w "/opt/cool/systemplate" ]; then
-    echo "📁 Updating systemplate..."
-    rsync -a --delete /etc/ /opt/cool/systemplate/etc/
-    cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/
-    echo "✅ systemplate updated"
-fi
+# Erstelle und aktualisiere systemplate bei jedem Start
+echo "📁 Setting up systemplate..."
+sudo mkdir -p /opt/cool/systemplate/{dev,tmp,proc,sys}
+sudo rsync -a --delete /etc/ /opt/cool/systemplate/etc/
+sudo cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/ 2>/dev/null || true
+sudo chmod -R 755 /opt/cool/systemplate
+sudo chown -R cool:cool /opt/cool
+echo "✅ systemplate setup complete"
 
 # Zeige Locale-Info
 echo "🌍 Current locale: $(locale | grep LANG)"
