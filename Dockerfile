@@ -1,70 +1,119 @@
-FROM collabora/code:24.04
+name: Build and Push to GHCR
 
-USER root
-ENV DEBIAN_FRONTEND=noninteractive
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+  # Automatischer Trigger bei Upstream-Änderungen
+  schedule:
+    # Läuft täglich um 6:00 UTC
+    - cron: '0 6 * * *'
 
-# Installiere deutsche Locales und Tools
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      locales \
-      locales-all \
-      debconf-i18n \
-      rsync \
-      curl && \
-    # Deutsche Locale konfigurieren
-    echo "de_DE.UTF-8 UTF-8" >> /etc/locale.gen && \
-    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
-    locale-gen && \
-    update-locale LANG=de_DE.UTF-8 LC_ALL=de_DE.UTF-8 && \
-    # Systemplate korrekt vorbereiten
-    mkdir -p /opt/cool/systemplate && \
-    chown -R cool:cool /opt/cool && \
-    rsync -av --delete /etc/ /opt/cool/systemplate/etc/ && \
-    mkdir -p /opt/cool/systemplate/{dev,tmp,proc,sys} && \
-    cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/ && \
-    chmod -R 755 /opt/cool/systemplate && \
-    chown -R cool:cool /opt/cool && \
-    # Cleanup
-    apt-get autoremove -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/collabora-locale
+  UPSTREAM_IMAGE: collabora/code
 
-# Erstelle ein einfaches Startup-Script inline
-RUN cat > /usr/local/bin/start-collabora.sh << 'EOF' && \
-    chmod +x /usr/local/bin/start-collabora.sh
-#!/bin/bash
-set -e
+jobs:
+  # Job zur Überprüfung von Upstream-Updates
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      needs-update: ${{ steps.check.outputs.needs-update }}
+      upstream-digest: ${{ steps.check.outputs.upstream-digest }}
+    steps:
+      - name: Check for upstream updates
+        id: check
+        run: |
+          # Aktueller Digest des Upstream-Images
+          UPSTREAM_DIGEST=$(docker manifest inspect ${{ env.UPSTREAM_IMAGE }}:latest | jq -r '.config.digest')
+          echo "upstream-digest=$UPSTREAM_DIGEST" >> $GITHUB_OUTPUT
+          
+          # Prüfe ob unser letztes Build auf einem anderen Digest basiert
+          LAST_BUILD_DIGEST=$(gh api repos/${{ github.repository }}/actions/variables/LAST_UPSTREAM_DIGEST --jq '.value' 2>/dev/null || echo "")
+          
+          if [[ "$UPSTREAM_DIGEST" != "$LAST_BUILD_DIGEST" ]] || [[ "${{ github.event_name }}" != "schedule" ]]; then
+            echo "needs-update=true" >> $GITHUB_OUTPUT
+            echo "🔄 Upstream update detected or manual trigger"
+          else
+            echo "needs-update=false" >> $GITHUB_OUTPUT
+            echo "✅ No upstream updates needed"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-# Prüfe systemplate bei jedem Start
-if [ -d "/opt/cool/systemplate" ] && [ -w "/opt/cool/systemplate" ]; then
-    echo "Updating systemplate..."
-    rsync -a --delete /etc/ /opt/cool/systemplate/etc/
-    cp /etc/{passwd,group,hosts,resolv.conf} /opt/cool/systemplate/etc/
-fi
+  build:
+    runs-on: ubuntu-latest
+    needs: check-upstream
+    # Nur bauen wenn Update nötig ist
+    if: needs.check-upstream.outputs.needs-update == 'true'
+    
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-# Starte Collabora mit korrekten Parametern
-exec /usr/bin/coolwsd \
-    --version \
-    --o:sys_template_path=/opt/cool/systemplate \
-    --o:child_root_path=/opt/cool/child-roots \
-    --o:file_server_root_path=/usr/share/coolwsd \
-    "$@"
-EOF
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-# Environment-Variablen
-ENV LANG=de_DE.UTF-8 \
-    LANGUAGE=de_DE:de:en_US:en \
-    LC_ALL=de_DE.UTF-8 \
-    dictionaries="de_DE en_US" \
-    server_name="localhost" \
-    extra_params="--o:ssl.enable=false --o:ssl.termination=true"
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-USER cool
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value={{run_number}}
+            type=sha,prefix={{branch}}-
 
-# Verwende unser Startup-Script
-ENTRYPOINT ["/usr/local/bin/start-collabora.sh"]
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.run_number }}
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Multi-platform build (optional)
+          platforms: linux/amd64,linux/arm64
 
-EXPOSE 9980
+      - name: Update upstream digest variable
+        if: success()
+        run: |
+          gh api repos/${{ github.repository }}/actions/variables/LAST_UPSTREAM_DIGEST \
+            -X PATCH \
+            -f name=LAST_UPSTREAM_DIGEST \
+            -f value="${{ needs.check-upstream.outputs.upstream-digest }}" \
+            2>/dev/null || \
+          gh api repos/${{ github.repository }}/actions/variables \
+            -f name=LAST_UPSTREAM_DIGEST \
+            -f value="${{ needs.check-upstream.outputs.upstream-digest }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:9980/hosting/discovery || exit 1
+      - name: Test image
+        run: |
+          docker run --rm --detach --name test-container \
+            -p 9980:9980 \
+            ${{ env.IMAGE_NAME }}:latest
+          
+          # Warte auf Startup
+          sleep 30
+          
+          # Einfacher Health Check
+          curl -f http://localhost:9980/hosting/discovery || exit 1
+          
+          # Container stoppen
+          docker stop test-container
