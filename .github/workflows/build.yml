@@ -3,47 +3,60 @@ name: Build and Push to GHCR
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
-  # Automatischer Trigger bei Upstream-Änderungen
   schedule:
-    # Läuft täglich um 6:00 UTC
-    - cron: '0 6 * * *'
+    # Täglich um 2:00 UTC prüfen
+    - cron: '0 2 * * *'
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/collabora-locale
-  UPSTREAM_IMAGE: collabora/code
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  BASE_IMAGE: collabora/code:latest
 
 jobs:
-  # Job zur Überprüfung von Upstream-Updates
   check-upstream:
     runs-on: ubuntu-latest
     outputs:
-      needs-update: ${{ steps.check.outputs.needs-update }}
-      upstream-digest: ${{ steps.check.outputs.upstream-digest }}
+      should-build: ${{ steps.compare.outputs.should-build }}
+      base-digest: ${{ steps.upstream.outputs.digest }}
     steps:
-      - name: Check for upstream updates
-        id: check
+      - name: Get upstream image digest
+        id: upstream
         run: |
-          # Aktueller Digest des Upstream-Images
-          UPSTREAM_DIGEST=$(docker manifest inspect ${{ env.UPSTREAM_IMAGE }}:latest | jq -r '.config.digest')
-          echo "upstream-digest=$UPSTREAM_DIGEST" >> $GITHUB_OUTPUT
-          
-          # Prüfe ob unser letztes Build auf einem anderen Digest basiert
-          LAST_BUILD_DIGEST=$(gh api repos/${{ github.repository }}/actions/variables/LAST_UPSTREAM_DIGEST --jq '.value' 2>/dev/null || echo "")
-          
-          if [[ "$UPSTREAM_DIGEST" != "$LAST_BUILD_DIGEST" ]] || [[ "${{ github.event_name }}" != "schedule" ]]; then
-            echo "needs-update=true" >> $GITHUB_OUTPUT
-            echo "🔄 Upstream update detected or manual trigger"
+          DIGEST=$(docker manifest inspect ${{ env.BASE_IMAGE }} | jq -r '.config.digest')
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "Upstream digest: $DIGEST"
+
+      - name: Check if our image exists and get its base digest
+        id: current
+        run: |
+          if docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest > /dev/null 2>&1; then
+            # Extrahiere das Label mit dem Base-Image-Digest falls vorhanden
+            CURRENT_BASE=$(docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest | jq -r '.config.digest // empty')
+            echo "current-base=$CURRENT_BASE" >> $GITHUB_OUTPUT
+            echo "Current image base digest: $CURRENT_BASE"
           else
-            echo "needs-update=false" >> $GITHUB_OUTPUT
-            echo "✅ No upstream updates needed"
+            echo "current-base=" >> $GITHUB_OUTPUT
+            echo "No current image found"
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare digests
+        id: compare
+        run: |
+          UPSTREAM_DIGEST="${{ steps.upstream.outputs.digest }}"
+          CURRENT_BASE="${{ steps.current.outputs.current-base }}"
+          
+          if [ "$UPSTREAM_DIGEST" != "$CURRENT_BASE" ] || [ -z "$CURRENT_BASE" ]; then
+            echo "should-build=true" >> $GITHUB_OUTPUT
+            echo "Build needed: upstream changed or no current image"
+          else
+            echo "should-build=false" >> $GITHUB_OUTPUT
+            echo "No build needed: digests match"
+          fi
 
   build:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should-build == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -72,7 +85,11 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=raw,value=latest,enable={{is_default_branch}}
+            type=schedule,pattern={{date 'YYYYMMDD'}}
             type=run_number
+          labels: |
+            org.opencontainers.image.base.digest=${{ needs.check-upstream.outputs.base-digest }}
+            org.opencontainers.image.base.name=${{ env.BASE_IMAGE }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -81,3 +98,23 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            BASE_DIGEST=${{ needs.check-upstream.outputs.base-digest }}
+
+      - name: Update README with build info
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "## Last Build" > BUILD_INFO.md
+          echo "- **Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> BUILD_INFO.md
+          echo "- **Base Image:** ${{ env.BASE_IMAGE }}" >> BUILD_INFO.md
+          echo "- **Base Digest:** ${{ needs.check-upstream.outputs.base-digest }}" >> BUILD_INFO.md
+          echo "- **Trigger:** ${{ github.event_name }}" >> BUILD_INFO.md
+          
+          if [ -f README.md ]; then
+            # Entferne alte Build-Info falls vorhanden
+            sed '/## Last Build/,/^$/d' README.md > README_temp.md
+            # Füge neue Build-Info hinzu
+            cat README_temp.md BUILD_INFO.md > README.md
+            rm README_temp.md BUILD_INFO.md
+          fi
