@@ -56,7 +56,13 @@ jobs:
 
   build:
     needs: check-upstream
-    if: needs.check-upstream.outputs.should-build == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Nur bauen wenn:
+    # - Bei Schedule: Upstream hat sich geändert
+    # - Bei Push oder Manual: Immer
+    if: |
+      (github.event_name == 'schedule' && needs.check-upstream.outputs.should-build == 'true') ||
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
