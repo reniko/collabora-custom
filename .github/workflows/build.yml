@@ -1,72 +1,15 @@
-name: Build and Push to GHCR
+name: Build
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches:
+      - main
   schedule:
-    # Täglich um 2:00 UTC prüfen
-    - cron: '0 2 * * *'
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  BASE_IMAGE: collabora/code:latest
+    - cron: '0 4 * * *'
 
 jobs:
-  check-upstream:
-    runs-on: ubuntu-latest
-    outputs:
-      should-build: ${{ steps.compare.outputs.should-build }}
-      base-digest: ${{ steps.upstream.outputs.digest }}
-    steps:
-      - name: Get upstream image digest
-        id: upstream
-        run: |
-          DIGEST=$(docker manifest inspect ${{ env.BASE_IMAGE }} | jq -r '.config.digest')
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-          echo "Upstream digest: $DIGEST"
-
-      - name: Check if our image exists and get its base digest
-        id: current
-        run: |
-          if docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest > /dev/null 2>&1; then
-            # Extrahiere das Label mit dem Base-Image-Digest falls vorhanden
-            CURRENT_BASE=$(docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest | jq -r '.config.digest // empty')
-            echo "current-base=$CURRENT_BASE" >> $GITHUB_OUTPUT
-            echo "Current image base digest: $CURRENT_BASE"
-          else
-            echo "current-base=" >> $GITHUB_OUTPUT
-            echo "No current image found"
-          fi
-
-      - name: Compare digests
-        id: compare
-        run: |
-          UPSTREAM_DIGEST="${{ steps.upstream.outputs.digest }}"
-          CURRENT_BASE="${{ steps.current.outputs.current-base }}"
-          
-          if [ "$UPSTREAM_DIGEST" != "$CURRENT_BASE" ] || [ -z "$CURRENT_BASE" ]; then
-            echo "should-build=true" >> $GITHUB_OUTPUT
-            echo "Build needed: upstream changed or no current image"
-          else
-            echo "should-build=false" >> $GITHUB_OUTPUT
-            echo "No build needed: digests match"
-          fi
-
   build:
-    needs: check-upstream
-    # Nur bauen wenn:
-    # - Bei Schedule: Upstream hat sich geändert
-    # - Bei Push oder Manual: Immer
-    if: |
-      (github.event_name == 'schedule' && needs.check-upstream.outputs.should-build == 'true') ||
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
 
     steps:
       - name: Checkout repo
@@ -75,52 +18,63 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Pull upstream image and get digest
+        id: upstream_digest
+        run: |
+          docker pull collabora/code:latest
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' collabora/code:latest)
+          echo "Upstream Digest: $DIGEST"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Download last digest artifact
+        uses: actions/download-artifact@v4
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=schedule,pattern={{date 'YYYYMMDD'}}
-            type=raw,value=${{ github.run_number }}
-          labels: |
-            org.opencontainers.image.base.digest=${{ needs.check-upstream.outputs.base-digest }}
-            org.opencontainers.image.base.name=${{ env.BASE_IMAGE }}
+          name: last-digest
+        continue-on-error: true
+
+      - name: Read last digest
+        id: last_digest
+        run: |
+          if [ -f digest.txt ]; then
+            LAST_DIGEST=$(cat digest.txt)
+          else
+            LAST_DIGEST="none"
+          fi
+          echo "Last Digest: $LAST_DIGEST"
+          echo "last_digest=$LAST_DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Check if build is needed
+        id: check
+        run: |
+          if [ "${{ steps.upstream_digest.outputs.digest }}" = "${{ steps.last_digest.outputs.last_digest }}" ]; then
+            echo "No changes in upstream image. Skipping build."
+            echo "build_needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Upstream image changed. Building!"
+            echo "build_needed=true" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
+        if: steps.check.outputs.build_needed == 'true'
         uses: docker/build-push-action@v5
         with:
-          context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-            BASE_DIGEST=${{ needs.check-upstream.outputs.base-digest }}
+          tags: ghcr.io/${{ github.repository }}:latest
 
-      - name: Update README with build info
-        if: github.ref == 'refs/heads/main'
+      - name: Save new digest artifact
+        if: steps.check.outputs.build_needed == 'true'
         run: |
-          echo "## Last Build" > BUILD_INFO.md
-          echo "- **Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> BUILD_INFO.md
-          echo "- **Base Image:** ${{ env.BASE_IMAGE }}" >> BUILD_INFO.md
-          echo "- **Base Digest:** ${{ needs.check-upstream.outputs.base-digest }}" >> BUILD_INFO.md
-          echo "- **Trigger:** ${{ github.event_name }}" >> BUILD_INFO.md
-          
-          if [ -f README.md ]; then
-            # Entferne alte Build-Info falls vorhanden
-            sed '/## Last Build/,/^$/d' README.md > README_temp.md
-            # Füge neue Build-Info hinzu
-            cat README_temp.md BUILD_INFO.md > README.md
-            rm README_temp.md BUILD_INFO.md
-          fi
+          echo "${{ steps.upstream_digest.outputs.digest }}" > digest.txt
+
+      - name: Upload new digest
+        if: steps.check.outputs.build_needed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: last-digest
+          path: digest.txt
