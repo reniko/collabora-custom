@@ -9,8 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # wichtig für Commit und Push
 
       - name: Pull upstream image
         run: docker pull collabora/code:latest
@@ -21,17 +23,11 @@ jobs:
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' collabora/code:latest)
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
-      - name: Download last digest artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: last-digest
-        continue-on-error: true
-
-      - name: Read last digest
+      - name: Read last digest from file
         id: last_digest
         run: |
-          if [ -f digest.txt ]; then
-            echo "last_digest=$(cat digest.txt)" >> $GITHUB_OUTPUT
+          if [ -f last-digest.txt ]; then
+            echo "last_digest=$(cat last-digest.txt)" >> $GITHUB_OUTPUT
           else
             echo "last_digest=none" >> $GITHUB_OUTPUT
           fi
@@ -66,13 +62,17 @@ jobs:
           push: true
           tags: ghcr.io/reniko/collabora-custom:latest
 
-      - name: Write new digest
+      - name: Write new digest to file
         if: steps.check.outputs.build_needed == 'true'
-        run: echo "${{ steps.upstream_digest.outputs.digest }}" > digest.txt
+        run: echo "${{ steps.upstream_digest.outputs.digest }}" > last-digest.txt
 
-      - name: Upload new digest
+      - name: Commit and push digest file
         if: steps.check.outputs.build_needed == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: last-digest
-          path: digest.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_PAT }}  # oder besser eigenen PAT als Secret anlegen, z.B. REPO_PAT
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last-digest.txt
+          git commit -m "Update last digest"
+          git push
