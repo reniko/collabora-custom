@@ -1,78 +1,39 @@
-name: Build and Push Custom Collabora
+name: Build and Push to GHCR
 
 on:
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
-  schedule:
-    - cron: '0 3 * * *'
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/collabora-locale
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # wichtig für Commit und Push
 
-      - name: Pull upstream image
-        run: docker pull collabora/code:latest
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Get upstream image digest
-        id: upstream_digest
-        run: |
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' collabora/code:latest)
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-
-      - name: Read last digest from file
-        id: last_digest
-        run: |
-          if [ -f last-digest.txt ]; then
-            echo "last_digest=$(cat last-digest.txt)" >> $GITHUB_OUTPUT
-          else
-            echo "last_digest=none" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Check if build is needed
-        id: check
-        run: |
-          if [ "${{ steps.upstream_digest.outputs.digest }}" = "${{ steps.last_digest.outputs.last_digest }}" ]; then
-            echo "No changes in upstream image. Skipping build."
-            echo "build_needed=false" >> $GITHUB_OUTPUT
-          else
-            echo "Upstream image changed. Building!"
-            echo "build_needed=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Log in to GHCR
-        if: steps.check.outputs.build_needed == 'true'
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: reniko # dein GitHub Username
-          password: ${{ secrets.GHCR_PAT }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        if: steps.check.outputs.build_needed == 'true'
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push image
-        if: steps.check.outputs.build_needed == 'true'
+      - name: Build & push to GHCR
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
-          tags: ghcr.io/reniko/collabora-custom:latest
-
-      - name: Write new digest to file
-        if: steps.check.outputs.build_needed == 'true'
-        run: echo "${{ steps.upstream_digest.outputs.digest }}" > last-digest.txt
-
-      - name: Commit and push digest file
-        if: steps.check.outputs.build_needed == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_PAT }}  # oder besser eigenen PAT als Secret anlegen, z.B. REPO_PAT
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add last-digest.txt
-          git commit -m "Update last digest"
-          git push
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.run_number }}
