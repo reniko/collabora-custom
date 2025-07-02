@@ -1,36 +1,24 @@
-name: Build
+name: Build and Push Custom Collabora
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
   schedule:
-    - cron: '0 4 * * *'
+    - cron: '0 3 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Pull upstream image
+        run: docker pull collabora/code:latest
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull upstream image and get digest
+      - name: Get upstream image digest
         id: upstream_digest
         run: |
-          docker pull collabora/code:latest
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' collabora/code:latest)
-          echo "Upstream Digest: $DIGEST"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
       - name: Download last digest artifact
@@ -43,12 +31,10 @@ jobs:
         id: last_digest
         run: |
           if [ -f digest.txt ]; then
-            LAST_DIGEST=$(cat digest.txt)
+            echo "last_digest=$(cat digest.txt)" >> $GITHUB_OUTPUT
           else
-            LAST_DIGEST="none"
+            echo "last_digest=none" >> $GITHUB_OUTPUT
           fi
-          echo "Last Digest: $LAST_DIGEST"
-          echo "last_digest=$LAST_DIGEST" >> $GITHUB_OUTPUT
 
       - name: Check if build is needed
         id: check
@@ -61,21 +47,30 @@ jobs:
             echo "build_needed=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and push Docker image
+      - name: Log in to GHCR
+        if: steps.check.outputs.build_needed == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: reniko # dein GitHub Username
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.build_needed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
         if: steps.check.outputs.build_needed == 'true'
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
-
-      - name: Save new digest artifact
-        if: steps.check.outputs.build_needed == 'true'
-        run: |
-          echo "${{ steps.upstream_digest.outputs.digest }}" > digest.txt
+          tags: ghcr.io/reniko/collabora-custom:latest
 
       - name: Upload new digest
         if: steps.check.outputs.build_needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: last-digest
-          path: digest.txt
+          path: |
+            digest.txt
+        run: echo "${{ steps.upstream_digest.outputs.digest }}" > digest.txt
