@@ -59,6 +59,7 @@ jobs:
           else
             echo "Upstream image changed. Building!"
             echo "build_needed=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build and push Docker image
         if: steps.check.outputs.build_needed == 'true'
