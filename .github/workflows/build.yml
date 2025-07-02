@@ -1,39 +1,82 @@
-name: Build and Push to GHCR
+name: Build and Push Custom Collabora
 
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
-
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/collabora-locale
+  schedule:
+    - cron: '0 3 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
-
+    
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}  # Wichtig für Push-Berechtigung
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Pull upstream image
+        run: docker pull collabora/code:latest
 
-      - name: Login to GHCR
+      - name: Get upstream image digest
+        id: upstream_digest
+        run: |
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' collabora/code:latest)
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Read last digest from file
+        id: last_digest
+        run: |
+          if [ -f last-digest.txt ]; then
+            echo "last_digest=$(cat last-digest.txt)" >> $GITHUB_OUTPUT
+          else
+            echo "last_digest=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if build is needed
+        id: check
+        run: |
+          if [ "${{ steps.upstream_digest.outputs.digest }}" = "${{ steps.last_digest.outputs.last_digest }}" ]; then
+            echo "No changes in upstream image. Skipping build."
+            echo "build_needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Upstream image changed. Building!"
+            echo "build_needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log in to GHCR
+        if: steps.check.outputs.build_needed == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push to GHCR
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.build_needed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        if: steps.check.outputs.build_needed == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.run_number }}
+          tags: ghcr.io/${{ github.repository_owner }}/collabora-custom:latest
+
+      - name: Write new digest to file
+        if: steps.check.outputs.build_needed == 'true'
+        run: echo "${{ steps.upstream_digest.outputs.digest }}" > last-digest.txt
+
+      - name: Commit and push digest file
+        if: steps.check.outputs.build_needed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last-digest.txt
+          git commit -m "Update last digest"
+          git push
