@@ -66,11 +66,13 @@ jobs:
           push: true
           tags: ghcr.io/reniko/collabora-custom:latest
 
+      - name: Write new digest
+        if: steps.check.outputs.build_needed == 'true'
+        run: echo "${{ steps.upstream_digest.outputs.digest }}" > digest.txt
+
       - name: Upload new digest
         if: steps.check.outputs.build_needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: last-digest
-          path: |
-            digest.txt
-        run: echo "${{ steps.upstream_digest.outputs.digest }}" > digest.txt
+          path: digest.txt
